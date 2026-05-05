@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+:root {
+  --color-bg: #000000;
+  --color-surface: #09090b;
+  --color-surface-soft: #18181b;
+  --color-text: #ffffff;
+  --color-text-dim: #71717a;
+  --color-accent: #ffffff;
+  --color-accent-dim: #27272a;
+  --color-border: #18181b;
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    background-color: #000000;
+    color: #ffffff;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    background-color: #09090b;
+    border: 1px solid #18181b;
+  }
+
+  .accent-panel {
+    background-color: #ffffff;
+    color: #000000;
+    border: 1px solid #ffffff;
+  }
+
+  .geo-panel {
+    background-color: #000000;
+    border: 1px solid #18181b;
+  }
+
+  .btn-accent {
+    background-color: #ffffff;
+    color: #000000;
+    font-weight: 700;
+    padding: 0.75rem 1.5rem;
+    border-radius: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    font-size: 0.7rem;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .btn-accent:hover {
+    background-color: #d4d4d8;
+    transform: translateY(-1px);
+  }
+  .btn-accent:active {
+    transform: translateY(0);
+  }
+
+  .btn-ghost {
+    background-color: transparent;
+    border: 1px solid #18181b;
+    color: #52525b;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    font-size: 0.7rem;
+    padding: 0.75rem 1.5rem;
+    transition: all 0.3s;
+  }
+  .btn-ghost:hover {
+    color: #ffffff;
+    border-color: #3f3f46;
+    background-color: #09090b;
+  }
+
+  .label-geo {
+    font-size: 9px;
+    font-weight: 700;
+    color: #3f3f46;
+    text-transform: uppercase;
+    letter-spacing: 0.4em;
+    margin-bottom: 0.75rem;
+    display: block;
+  }
+
+  .input-geo {
+    background-color: #000000;
+    border-bottom: 1px solid #18181b;
+    padding: 1rem 0;
+    font-size: 1.25rem;
+    font-weight: 300;
+    color: #ffffff;
+    outline: none;
+    transition: all 0.3s;
+    width: 100%;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+  }
+  .input-geo::placeholder {
+    color: #09090b;
+  }
+  .input-geo:focus {
+    border-color: #ffffff;
+  }
+
+  .chip {
+    padding: 0.6rem 1.2rem;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    transition: all 0.2s;
+  }
+
+  .chip-active {
+    background-color: #ffffff;
+    color: #000000;
+  }
+
+  .chip-inactive {
+    background-color: #000000;
+    border: 1px solid #18181b;
+    color: #3f3f46;
+  }
+  .chip-inactive:hover {
+    border-color: #52525b;
+    color: #a1a1aa;
+  }
+
+  .voice-btn {
+    width: 6rem;
+    height: 6rem;
+    border-radius: 9999px;
+    border: 1px solid #18181b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    position: relative;
+    background: transparent;
+  }
+
+  .voice-btn.listening {
+    background-color: #ffffff;
+    color: #000000;
+    border-color: #ffffff;
+    transform: scale(1.1);
+    box-shadow: 0 0 40px rgba(255,255,255,0.1);
+  }
+
+  /* --- Minimalist Orb --- */
+  .neural-orb {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: #ffffff;
+    position: relative;
+    transition: all 0.4s;
+  }
+
+  .orb-active {
+    animation: pulse-pro 2.5s infinite cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  @keyframes pulse-pro {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.8; box-shadow: 0 0 50px rgba(255,255,255,0.2); }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  .wave-bar {
+    width: 1.5px;
+    background: #000000;
+    margin: 0 1px;
+  }
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
+/* Custom Textures */
+.mesh-bg {
+  background-image: radial-gradient(#18181b 0.5px, transparent 0.5px);
+  background-size: 24px 24px;
+}

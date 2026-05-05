@@ -1,0 +1,12 @@
+{
+  "name": "STUDY_AI",
+  "description": "A futuristic hub for deep focus and cognitive synchronization, featuring AI-powered study companions and real-time learning analytics.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "AI Study Companion",
+    "Deep Focus Timer",
+    "Neural Analytics"
+  ]
+}
