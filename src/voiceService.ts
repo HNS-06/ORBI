@@ -1,179 +1,193 @@
-// Speech-to-Text using Web Speech API
+import { VoiceRecorder } from 'capacitor-voice-recorder';
+
 export type STTCallback = (transcript: string, isFinal: boolean) => void;
 
-let recognition: any = null;
+let isRecording = false;
+let autoStopTimer: NodeJS.Timeout | null = null;
+let currentOnResult: STTCallback | null = null;
+let currentOnEnd: (() => void) | null = null;
 
 export async function requestMicPermission(): Promise<boolean> {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    stream.getTracks().forEach(track => track.stop()); // Close immediately
-    return true;
-  } catch (err) {
-    console.error("Mic permission denied:", err);
-    return false;
-  }
+  const result = await VoiceRecorder.requestAudioRecordingPermission();
+  return !!result.value;
 }
 
-let mediaRecorder: MediaRecorder | null = null;
-let audioChunks: Blob[] = [];
-let audioContext: AudioContext | null = null;
-let analyser: AnalyserNode | null = null;
-let silenceTimer: NodeJS.Timeout | null = null;
-let isRecording = false;
+// Debug State for UI feedback
+export let voiceDebugState = {
+  status: "idle",
+  fileSize: 0,
+  lastTranscript: "",
+  error: ""
+};
 
-const SILENCE_THRESHOLD = 0.05; // Adjust based on noise
-const SILENCE_DURATION = 1500; // 1.5 seconds of silence stops recording
+const BACKEND_URL = "http://localhost:8000"; // Adjust if needed
 
-// Helper to interact with Groq Whisper API directly from frontend
-async function transcribeAudio(blob: Blob): Promise<string> {
-  const formData = new FormData();
-  formData.append('file', blob, 'recording.webm');
-  formData.append('model', 'whisper-large-v3-turbo');
+// Helper to interact with Backend Transcription API
+async function transcribeAudioBase64(base64Data: string, mimeType: string): Promise<string> {
+  voiceDebugState.status = "transcribing";
   
-  const GROQ_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
+  // Convert base64 to Blob
+  const byteCharacters = atob(base64Data);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  const blob = new Blob([byteArray], { type: mimeType });
+  
+  console.log(`[ORBI VOICE] Audio file size: ${blob.size} bytes`);
+  voiceDebugState.fileSize = blob.size;
+
+  if (blob.size === 0) {
+    console.error("[ORBI VOICE] Recording failed. Audio file size is 0.");
+    voiceDebugState.error = "File size 0";
+    return "";
+  }
+
+  const formData = new FormData();
+  formData.append('file', blob, 'recording.aac');
 
   try {
-    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    console.log("[ORBI VOICE] Sending audio to backend...");
+    const res = await fetch(`${BACKEND_URL}/voice/transcribe`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_KEY}`
-      },
       body: formData
     });
     
-    if (!res.ok) throw new Error("Whisper transcription failed");
+    if (!res.ok) throw new Error(`Backend Error ${res.status}`);
     const data = await res.json();
-    return data.text.trim();
-  } catch (err) {
-    console.error("Transcription error:", err);
+    console.log("[ORBI VOICE] Transcript received:", data.transcript);
+    voiceDebugState.lastTranscript = data.transcript;
+    voiceDebugState.status = "idle";
+    return data.transcript.trim();
+  } catch (err: any) {
+    console.error("[ORBI VOICE] Transcription error:", err);
+    voiceDebugState.error = err.message;
+    voiceDebugState.status = "error";
     return "";
   }
 }
 
-export function startSTT(onResult: STTCallback, onEnd: () => void): boolean {
+export async function startSTT(onResult: STTCallback, onEnd: () => void): Promise<boolean> {
   if (isRecording) return true;
   
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-    isRecording = true;
-    audioChunks = [];
-    
-    // Set up AudioContext for silence detection
-    audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaStreamSource(stream);
-    source.connect(analyser);
-    analyser.fftSize = 256;
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
+  console.log("[ORBI VOICE] Mic button pressed. Checking permissions...");
+  voiceDebugState.status = "requesting_mic";
+  voiceDebugState.error = "";
 
-    const checkSilence = () => {
-      if (!isRecording) return;
-      analyser!.getByteFrequencyData(dataArray);
-      let sum = 0;
-      for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
-      const avg = sum / bufferLength / 255; // Normalize 0 to 1
+  currentOnResult = onResult;
+  currentOnEnd = onEnd;
 
-      if (avg < SILENCE_THRESHOLD) {
-        if (!silenceTimer) {
-          silenceTimer = setTimeout(() => {
-            stopSTT(); // Auto-stop after duration
-          }, SILENCE_DURATION);
-        }
-      } else {
-        if (silenceTimer) {
-          clearTimeout(silenceTimer);
-          silenceTimer = null;
-        }
+  try {
+    const hasPerm = await VoiceRecorder.hasAudioRecordingPermission();
+    if (!hasPerm.value) {
+      console.log("[ORBI VOICE] Requesting native audio permission...");
+      const req = await VoiceRecorder.requestAudioRecordingPermission();
+      if (!req.value) {
+        throw new Error("Permission Denied by User");
       }
-      requestAnimationFrame(checkSilence);
-    };
+    }
+
+    console.log("[ORBI VOICE] Start recording called...");
+    const startResult = await VoiceRecorder.startRecording();
     
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
-    
-    mediaRecorder.onstop = async () => {
-      isRecording = false;
-      stream.getTracks().forEach(t => t.stop());
-      if (audioContext) {
-        audioContext.close();
-        audioContext = null;
-      }
+    if (startResult.value) {
+      console.log("[ORBI VOICE] Recording started successfully. Green mic indicator should be active.");
+      voiceDebugState.status = "recording";
+      isRecording = true;
+
+      if (autoStopTimer) clearTimeout(autoStopTimer);
+      autoStopTimer = setTimeout(() => {
+        if (isRecording) {
+          console.log("[ORBI VOICE] Auto-stopping recording to prevent infinite waiting state.");
+          stopSTT();
+        }
+      }, 5000); // 5 seconds max recording
       
-      const blob = new Blob(audioChunks, { type: 'audio/webm' });
-      if (blob.size > 1000) { // Ensure audio isn't completely empty
-        const text = await transcribeAudio(blob);
-        if (text) onResult(text, true);
+      return true;
+    } else {
+      throw new Error("Plugin failed to start recording.");
+    }
+  } catch (e: any) {
+    console.error("[ORBI VOICE] Recording failed", e);
+    voiceDebugState.error = e.message || "Unknown error";
+    voiceDebugState.status = "error";
+    if (currentOnEnd) currentOnEnd();
+    return false;
+  }
+}
+
+export async function stopSTT(): Promise<void> {
+  if (!isRecording) return;
+  
+  console.log("[ORBI VOICE] Stopping recording...");
+  if (autoStopTimer) clearTimeout(autoStopTimer);
+  isRecording = false;
+
+  try {
+    const result = await VoiceRecorder.stopRecording();
+    console.log("[ORBI VOICE] Recording stopped.");
+    
+    if (result.value && result.value.recordDataBase64) {
+      if (currentOnResult && currentOnEnd) {
+        const text = await transcribeAudioBase64(result.value.recordDataBase64, result.value.mimeType);
+        if (text) currentOnResult(text, true);
+        else currentOnResult("", false);
+        currentOnEnd();
       }
-      onEnd();
-    };
-    
-    mediaRecorder.start(100); // 100ms chunks
-    checkSilence();
-    
-  }).catch(err => {
-    console.error("Mic permission denied:", err);
-    onEnd();
-  });
-  
-  return true;
-}
-
-export function stopSTT(): void {
-  if (isRecording && mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
+    } else {
+      console.warn("[ORBI VOICE] Recording stopped but no audio data was returned.");
+      if (currentOnEnd) currentOnEnd();
+    }
+  } catch (e: any) {
+    console.error("[ORBI VOICE] Error stopping recording:", e);
+    if (currentOnEnd) currentOnEnd();
   }
 }
 
-// Text-to-Speech using Web Speech Synthesis
-let currentUtterance: SpeechSynthesisUtterance | null = null;
+// Backend TTS Integration
+let currentAudio: HTMLAudioElement | null = null;
 
-export function speak(text: string, options?: { rate?: number; pitch?: number; volume?: number; onEnd?: () => void }): void {
-  if (!window.speechSynthesis) {
-    options?.onEnd?.();
-    return;
-  }
+export async function speak(text: string, options?: { voice?: string; onEnd?: () => void }): Promise<void> {
   stopSpeaking();
-
-  const utterance = new SpeechSynthesisUtterance(text);
   
-  // Adjusted for extreme clarity and professional tone
-  utterance.rate = options?.rate ?? 1.0; 
-  utterance.pitch = options?.pitch ?? 1.0;
-  utterance.volume = options?.volume ?? 1.0;
+  try {
+    const response = await fetch(`${BACKEND_URL}/voice/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: text,
+        voice: options?.voice || "en-US-ChristopherNeural"
+      })
+    });
 
-  let voices = window.speechSynthesis.getVoices();
-  if (voices.length === 0) {
-    // If voices aren't loaded yet, try again after a tiny delay
-    setTimeout(() => { voices = window.speechSynthesis.getVoices(); }, 100);
+    if (!response.ok) throw new Error("TTS failed");
+    
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    
+    currentAudio = new Audio(url);
+    if (options?.onEnd) currentAudio.onended = options.onEnd;
+    
+    console.log("[ORBI VOICE] Playing AI response...");
+    await currentAudio.play();
+  } catch (err) {
+    console.error("TTS Error:", err);
+    // Fallback to browser TTS if backend fails
+    const utterance = new SpeechSynthesisUtterance(text);
+    if (options?.onEnd) utterance.onend = options.onEnd;
+    window.speechSynthesis.speak(utterance);
   }
-  
-  const preferred = 
-    voices.find(v => v.name.includes('Natural')) ||
-    voices.find(v => v.name.includes('Google US English')) ||
-    voices.find(v => v.name.includes('Microsoft David')) ||
-    voices.find(v => v.name.includes('Daniel')) ||
-    voices.find(v => v.name.includes('Samantha')) ||
-    voices.find(v => v.lang.startsWith('en')) ||
-    voices[0];
-
-  if (preferred) {
-    utterance.voice = preferred;
-    console.log("Using Voice Protocol:", preferred.name);
-  }
-
-  if (options?.onEnd) {
-    utterance.onend = options.onEnd;
-  }
-
-  currentUtterance = utterance;
-  window.speechSynthesis.speak(utterance);
 }
 
 export function stopSpeaking(): void {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+  }
   window.speechSynthesis?.cancel();
-  currentUtterance = null;
 }
 
 export function isSpeechSupported(): boolean {
-  return !!(((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition) && window.speechSynthesis);
+  return true;
 }

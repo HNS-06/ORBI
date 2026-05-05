@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Brain, Mic, MicOff, Send, RefreshCw, Volume2, VolumeX, Zap, ChevronDown, X, Sparkles, HelpCircle, Play, Pause } from 'lucide-react';
 import { Companion, Message } from '../types';
 import { chatWithCompanion, getAICheckin } from '../aiService';
-import { speak, stopSpeaking, stopSTT, startSTT } from '../voiceService';
+import { speak, stopSpeaking, stopSTT, startSTT, voiceDebugState } from '../voiceService';
 import { formatTime, recordSession, loadStats } from '../statsService';
 import VoiceController from '../components/VoiceController';
 import { FOCUS_TRACKS } from '../data';
@@ -50,6 +50,14 @@ export default function StudyScreen({ companion, topic, userName, onEndSession }
   const [chatInput, setChatInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [isListeningChat, setIsListeningChat] = useState(false);
+  const [debugInfo, setDebugInfo] = useState(voiceDebugState);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDebugInfo({ ...voiceDebugState });
+    }, 500);
+    return () => clearInterval(timer);
+  }, []);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const [trackIdx, setTrackIdx] = useState(0);
@@ -167,7 +175,17 @@ export default function StudyScreen({ companion, topic, userName, onEndSession }
 
   return (
     <motion.main initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="min-h-screen pt-28 pb-36 px-4 max-w-5xl mx-auto space-y-6">
+      className="min-h-screen pt-28 pb-36 px-4 max-w-5xl mx-auto space-y-6 relative">
+
+      {/* Debug Overlay */}
+      <div className="fixed top-4 right-4 p-2 bg-zinc-900/90 border border-zinc-800 rounded text-[7px] font-mono z-[100] pointer-events-none opacity-60">
+        <div>ORBI_VOICE_DEBUG</div>
+        <div className={debugInfo.status === 'error' ? 'text-red-500' : 'text-green-500'}>
+          STATUS: {debugInfo.status.toUpperCase()}
+        </div>
+        <div>SIZE: {debugInfo.fileSize} B</div>
+        {debugInfo.error && <div className="text-red-400">ERR: {debugInfo.error}</div>}
+      </div>
 
       <div className="flex items-center justify-between geo-panel px-6 py-4">
         <div>

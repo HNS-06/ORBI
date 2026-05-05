@@ -1,15 +1,18 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional
 import os
+import tempfile
 import google.generativeai as genai
+from groq import Groq
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
+import json
+import re
 
 load_dotenv()
 
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI(title="StudyAI API")
+app = FastAPI(title="ORBI AI API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,10 +22,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- AI Configuration ---
+# --- AI Configuration & Verification ---
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_KEY = os.getenv("GROQ_API_KEY")
+
+print("--- AI SERVICE INITIALIZATION ---")
+print(f"GEMINI_KEY LOADED: {'YES (ID: ' + (GEMINI_KEY[:5] if GEMINI_KEY else '') + '...)' if GEMINI_KEY else 'NO'}")
+print(f"GROQ_KEY LOADED:   {'YES (ID: ' + (GROQ_KEY[:5] if GROQ_KEY else '') + '...)' if GROQ_KEY else 'NO'}")
+print("---------------------------------")
+
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
+
+groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
 # --- Models ---
 class UserMessage(BaseModel):
@@ -37,108 +49,66 @@ class RecallRequest(BaseModel):
     transcript: str
     past_performance: Optional[str] = None
 
-class SessionStart(BaseModel):
-    user_id: str
-    companion_id: str
-    topic: str
-
-# --- Prompts ---
-CONVERSATION_SYSTEM = """You are a friendly but intelligent study companion.
-Rules:
-- Keep responses short and natural
-- Ask follow-up questions
-- Adapt tone based on user energy
-Goal: Help user stay focused and engaged."""
-
-RECALL_SYSTEM = """Analyze the following recall attempt for topic: {topic}
-Transcript: "{transcript}"
-Past Performance: {past_perf}
-
-Analyze:
-1. What concepts are correct?
-2. What is missing?
-3. What is unclear?
-
-Return JSON:
-{{
-  "score": 0-100,
-  "strengths": [],
-  "weak_areas": [],
-  "follow_up": "one question to trigger more recall"
-}}"""
+class TTSRequest(BaseModel):
+    text: str
+    voice: Optional[str] = "en-US-ChristopherNeural"
 
 # --- Endpoints ---
 
-@app.post("/session/start")
-async def start_session(data: SessionStart):
-    # Logic to initialize session in DB (PostgreSQL/Redis)
-    return {"session_id": "temp_session_123", "status": "active"}
-
 @app.post("/ai/chat")
 async def ai_chat(data: UserMessage):
-    if not GEMINI_KEY:
-        raise HTTPException(status_code=500, detail="Gemini key not configured")
+    """Unified chat endpoint using Groq with Gemini fallback."""
+    if not GROQ_KEY and not GEMINI_KEY:
+        raise HTTPException(status_code=500, detail="AI keys not configured")
     
+    system_prompt = f"You are a friendly but intelligent study companion. COMPANION: {data.companion}. TOPIC: {data.topic}."
+    if data.memory_context:
+        system_prompt += f" MEMORY: {data.memory_context}"
+
+    # Try Groq First
+    if GROQ_KEY:
+        try:
+            print(f"[AI] Attempting Groq Chat for topic: {data.topic}")
+            messages = [{"role": "system", "content": system_prompt}]
+            for h in data.history:
+                messages.append({"role": "assistant" if h["role"] == "ai" else "user", "content": h["text"]})
+            messages.append({"role": "user", "content": data.text})
+
+            chat_completion = groq_client.chat.completions.create(
+                messages=messages,
+                model="llama-3.3-70b-versatile",
+                temperature=0.7,
+                max_tokens=500
+            )
+            return {"response": chat_completion.choices[0].message.content}
+        except Exception as e:
+            print(f"[AI] Groq Error: {e}")
+            if not GEMINI_KEY:
+                raise HTTPException(status_code=500, detail=f"Groq failed: {str(e)}")
+
+    # Fallback to Gemini
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        
-        # Prepare context
-        context = f"[COMPANION: {data.companion}] [TOPIC: {data.topic}]"
-        if data.memory_context:
-            context += f" [MEMORY: {data.memory_context}]"
-            
+        print(f"[AI] Falling back to Gemini for topic: {data.topic}")
+        model = genai.GenerativeModel('gemini-1.5-flash')
         full_history = []
         for h in data.history:
             full_history.append({"role": "user" if h["role"] == "user" else "model", "parts": [h["text"]]})
             
         chat = model.start_chat(history=full_history)
-        response = chat.send_message(f"{context}\n\n{data.text}")
-        
+        response = chat.send_message(f"{system_prompt}\n\n{data.text}")
         return {"response": response.text}
     except Exception as e:
+        print(f"[AI] Gemini Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/recall/analyze")
-async def analyze_recall(data: RecallRequest):
-    if not GEMINI_KEY:
-        raise HTTPException(status_code=500, detail="Gemini key not configured")
-        
-    try:
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        prompt = RECALL_SYSTEM.format(
-            topic=data.topic, 
-            transcript=data.transcript, 
-            past_perf=data.past_performance or "No prior history"
-        )
-        
-        response = model.generate_content(prompt)
-        import json
-        import re
-        text = response.text
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        return {"error": "Failed to parse analysis"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# --- Voice Pipeline Endpoints ---
-
-from fastapi import UploadFile, File
-import tempfile
-from groq import Groq
-from fastapi.responses import StreamingResponse
-import edge_tts
-
-# We need the Groq key for Whisper. The frontend has one, or we can use it from env.
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 @app.post("/voice/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     """Transcribes an uploaded audio file using Groq Whisper API."""
+    if not GROQ_KEY:
+        raise HTTPException(status_code=500, detail="Groq key not configured for transcription")
+        
     try:
-        # Save temp file
+        print(f"[VOICE] Receiving audio: {file.filename}")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_audio:
             content = await file.read()
             temp_audio.write(content)
@@ -153,31 +123,68 @@ async def transcribe_audio(file: UploadFile = File(...)):
             )
         
         os.remove(temp_audio_path)
-        
         transcript = transcription.text.strip()
-        if not transcript:
-            raise HTTPException(status_code=400, detail="Empty transcript")
-            
+        print(f"[VOICE] Transcription result: {transcript}")
         return {"transcript": transcript}
     except Exception as e:
-        print("Transcription error:", e)
+        print(f"[VOICE] Transcription error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-class TTSRequest(BaseModel):
-    text: str
-    voice: Optional[str] = "en-US-ChristopherNeural"
+@app.post("/recall/analyze")
+async def analyze_recall(data: RecallRequest):
+    """Analyzes a recall attempt using AI."""
+    if not GROQ_KEY and not GEMINI_KEY:
+        raise HTTPException(status_code=500, detail="AI keys not configured")
+        
+    prompt = f"Analyze this recall attempt for topic: {data.topic}. Transcript: \"{data.transcript}\". Past Performance: {data.past_performance or 'None'}. Return ONLY valid JSON: {{\"score\": 0-100, \"strengths\": [], \"gaps\": [], \"tips\": [], \"keywords\": [], \"summary\": \"\"}}"
+
+    try:
+        if GROQ_KEY:
+            res = groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"}
+            )
+            return json.loads(res.choices[0].message.content)
+        
+        # Gemini fallback
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        match = re.search(r'\{.*\}', response.text, re.DOTALL)
+        return json.loads(match.group()) if match else {"error": "Failed to parse analysis"}
+    except Exception as e:
+        print(f"[AI] Analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/voice/tts")
 async def text_to_speech(data: TTSRequest):
     """Generates streaming audio from text using Microsoft Edge TTS."""
+    import edge_tts
+    from fastapi.responses import StreamingResponse
+    
     async def audio_generator():
         communicate = edge_tts.Communicate(data.text, data.voice, rate="+5%")
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 yield chunk["data"]
-
+ 
     return StreamingResponse(audio_generator(), media_type="audio/mpeg")
+
+@app.get("/test-ai")
+async def test_ai():
+    """Test AI connectivity with a simple prompt."""
+    try:
+        data = UserMessage(
+            text="Hello, this is a test.",
+            companion="TestBot",
+            topic="Testing",
+            history=[]
+        )
+        response = await ai_chat(data)
+        return {"status": "success", "response": response["response"]}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "groq": bool(GROQ_KEY), "gemini": bool(GEMINI_KEY)}

@@ -3,7 +3,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Brain, RefreshCw, Sparkles, BookOpen, Mic, Zap, ChevronRight } from 'lucide-react';
 import { Companion } from '../types';
 import { chatWithCompanion } from '../aiService';
-import { speak } from '../voiceService';
+import { speak, voiceDebugState } from '../voiceService';
 import VoiceController from '../components/VoiceController';
 import { loadStats } from '../statsService';
 
@@ -24,6 +24,7 @@ export default function HubScreen({ companion, userName, onStartStudy, onStartRe
   const [topic, setTopic] = useState('');
   const [aiResponse, setAiResponse] = useState(`${userName}, what are you going to study today?`);
   const [isThinking, setIsThinking] = useState(false);
+  const [debugInfo, setDebugInfo] = useState(voiceDebugState);
   const accRef = useRef('');
   const hasGreeted = useRef(false);
 
@@ -38,6 +39,13 @@ export default function HubScreen({ companion, userName, onStartStudy, onStartRe
       hasGreeted.current = true;
     }
   }, [userName]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDebugInfo({ ...voiceDebugState });
+    }, 500);
+    return () => clearInterval(timer);
+  }, []);
 
   // Auto Revision System
   const lastSession = stats.sessions[0];
@@ -60,6 +68,13 @@ export default function HubScreen({ companion, userName, onStartStudy, onStartRe
   }, [companion.systemPrompt]);
 
   const handleAIResponse = useCallback(async (userText: string) => {
+    if (!userText.trim()) {
+      const failMsg = "Didn't catch that, try again.";
+      setAiResponse(failMsg);
+      speak(failMsg, { onEnd: () => setIsListening(true) });
+      return;
+    }
+
     setIsThinking(true);
     setAiResponse("Processing data...");
     try {
@@ -117,7 +132,17 @@ export default function HubScreen({ companion, userName, onStartStudy, onStartRe
 
   return (
     <motion.main initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="min-h-screen pt-28 pb-36 px-6 flex flex-col items-center max-w-2xl mx-auto space-y-10">
+      className="min-h-screen pt-28 pb-36 px-6 flex flex-col items-center max-w-2xl mx-auto space-y-10 relative">
+      
+      {/* Debug Overlay */}
+      <div className="fixed top-4 right-4 p-2 bg-zinc-900/90 border border-zinc-800 rounded text-[7px] font-mono z-[100] pointer-events-none opacity-60">
+        <div>ORBI_VOICE_DEBUG</div>
+        <div className={debugInfo.status === 'error' ? 'text-red-500' : 'text-green-500'}>
+          STATUS: {debugInfo.status.toUpperCase()}
+        </div>
+        <div>SIZE: {debugInfo.fileSize} B</div>
+        {debugInfo.error && <div className="text-red-400">ERR: {debugInfo.error}</div>}
+      </div>
       
       <div className="text-center space-y-3">
         <motion.span initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="label-geo">Protocol / Session Active</motion.span>

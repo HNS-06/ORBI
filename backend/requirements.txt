@@ -7,7 +7,8 @@ psycopg2-binary
 redis
 google-generativeai
 openai
-elevenlabs
+groq
+edge-tts
 python-dotenv
 python-multipart
 jose[cryptography]
